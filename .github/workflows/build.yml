@@ -3,7 +3,7 @@ name: Build ttf-maker
 on:
   push:
     branches: [main]
-    tags: ["v*"]
+    tags: ["*"]
   workflow_dispatch:
 
 permissions:
@@ -32,7 +32,7 @@ jobs:
           path: dist/ttf-maker.exe
 
       - name: Publish release (tags only)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/ttf-maker.exe
