@@ -1,9 +1,13 @@
-name: Build EXE
+name: Build ttf-maker
 
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -14,14 +18,23 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
       - name: Install dependencies
         run: pip install fonttools brotli tkinterdnd2 pyinstaller
 
       - name: Build EXE
-        run: pyinstaller --onefile --noconsole --collect-all tkinterdnd2 font2ttf.py
+        run: pyinstaller --onefile --noconsole --name ttf-maker --collect-all tkinterdnd2 font2ttf.py
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ttf-maker
           path: dist/ttf-maker.exe
+
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/ttf-maker.exe
+          generate_release_notes: true
