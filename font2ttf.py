@@ -1,5 +1,5 @@
 """
-Font2TTF - המרת קבצי פונט (OTF / WOFF / WOFF2 / TTF) ל-TTF, בקבוצות.
+FontMaker - המרת קבצי פונט (OTF / WOFF / WOFF2 / TTF) ל-TTF, בקבוצות.
 התקנה:  pip install fonttools brotli
 אופציונלי (גרירת קבצים לחלון):  pip install tkinterdnd2
 """
@@ -28,8 +28,11 @@ EXTS = {".ttf", ".otf", ".woff", ".woff2"}
 
 # ---------- לוגיקת ההמרה ----------
 
-def _otf_to_ttf(font, max_err=1.0):
+def _otf_to_ttf(font, max_err=None):
     """המרת קווי מתאר CFF (קוביים) ל-glyf (ריבועיים)."""
+    if max_err is None:
+        # סטייה מקסימלית של 1/20000 מגודל ה-em: בלתי נראית גם בהגדלה גדולה
+        max_err = font["head"].unitsPerEm / 20000
     glyph_order = font.getGlyphOrder()
     gs = font.getGlyphSet()
     quad = {}
@@ -71,6 +74,13 @@ def _otf_to_ttf(font, max_err=1.0):
     post.mapping = {}
     post.glyphOrder = glyph_order
 
+    # פונט בלי hinting: מורים ל-Windows להחליק (anti-alias) בכל הגדלים
+    if "gasp" not in font:
+        gasp = newTable("gasp")
+        gasp.version = 1
+        gasp.gaspRange = {0xFFFF: 0x000A}
+        font["gasp"] = gasp
+
     font.sfntVersion = "\x00\x01\x00\x00"
 
 
@@ -78,16 +88,19 @@ def convert_one(src, out_dir):
     """ממיר קובץ אחד. מחזיר (src, שגיאה או None)."""
     try:
         base = os.path.splitext(os.path.basename(src))[0]
-        dst = os.path.join(out_dir, base + ".ttf")
         font = TTFont(src)
         font.flavor = None  # הסרת עטיפת WOFF/WOFF2
-        if font.sfntVersion == "OTTO" and "CFF " in font:
-            _otf_to_ttf(font)
+        # זיהוי לפי התוכן: "OTTO" = קווי מתאר CFF (OpenType), אחרת TrueType
+        ext = ".otf" if font.sfntVersion == "OTTO" else ".ttf"
+        dst = os.path.join(out_dir, base + ext)
+        if os.path.abspath(dst).lower() == os.path.abspath(src).lower():
+            font.close()  # הקובץ כבר בפורמט הסופי באותה תיקייה
+            return src, None, ext
         font.save(dst)
         font.close()
-        return src, None
+        return src, None, ext
     except Exception as e:
-        return src, str(e)
+        return src, str(e), None
 
 
 # ---------- ממשק ----------
@@ -208,16 +221,19 @@ class App(BaseTk):
 
     def worker(self, files, out_dir):
         errors = []
+        counts = {".ttf": 0, ".otf": 0}
         done = 0
         with ProcessPoolExecutor() as ex:
             futs = [ex.submit(convert_one, f, out_dir) for f in files]
             for fut in as_completed(futs):
-                src, err = fut.result()
+                src, err, ext = fut.result()
                 done += 1
                 if err:
                     errors.append((os.path.basename(src), err))
+                else:
+                    counts[ext] += 1
                 self.q.put(("progress", done, len(files)))
-        self.q.put(("done", errors, out_dir))
+        self.q.put(("done", errors, out_dir, counts))
 
     def poll(self):
         try:
@@ -227,22 +243,23 @@ class App(BaseTk):
                     self.progress["value"] = msg[1]
                     self.status.config(text=f"{msg[1]} / {msg[2]}")
                 else:
-                    self.finish(msg[1], msg[2])
+                    self.finish(msg[1], msg[2], msg[3])
                     return
         except queue.Empty:
             pass
         self.after(100, self.poll)
 
-    def finish(self, errors, out_dir):
+    def finish(self, errors, out_dir, counts):
         self.busy = False
         self.btn.config(state="normal")
-        ok = len(self.files) - len(errors)
-        self.status.config(text=f"הסתיים: {ok} הומרו, {len(errors)} נכשלו")
+        ok = counts[".ttf"] + counts[".otf"]
+        summary = f"TTF: {counts['.ttf']}   |   OTF (ללא אובדן): {counts['.otf']}"
+        self.status.config(text=f"הסתיים. {summary}")
         if errors:
             details = "\n".join(f"{n}: {e}" for n, e in errors[:15])
-            messagebox.showwarning("הסתיים עם שגיאות", f"{ok} הומרו.\n\nנכשלו:\n{details}")
+            messagebox.showwarning("הסתיים עם שגיאות", f"{summary}\n\nנכשלו ({len(errors)}):\n{details}")
         else:
-            if messagebox.askyesno("הסתיים", f"{ok} קבצים הומרו בהצלחה.\nלפתוח את התיקייה?"):
+            if messagebox.askyesno("הסתיים", f"{ok} קבצים עובדו בהצלחה.\n{summary}\n\nלפתוח את התיקייה?"):
                 try:
                     os.startfile(out_dir)  # Windows
                 except AttributeError:
