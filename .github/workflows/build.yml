@@ -24,4 +24,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ttf-maker
-          path: dist/font2ttf.exe
+          path: dist/ttf-maker.exe
